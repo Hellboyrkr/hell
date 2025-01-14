@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Insurance {
+    // Events
+    event PolicyIssued(uint256 policyId, address indexed policyholder, uint256 premium, uint256 coverage, uint256 duration);
+    event PremiumPaid(uint256 policyId, address indexed policyholder, uint256 amount, uint256 timestamp);
+    event ClaimSubmitted(uint256 claimId, uint256 policyId, address indexed policyholder, uint256 claimAmount, string reason, uint256 timestamp);
+    event ClaimApproved(uint256 claimId, uint256 policyId, address indexed policyholder, uint256 claimAmount, uint256 timestamp);
+    event ClaimPaid(uint256 claimId, uint256 policyId, address indexed policyholder, uint256 claimAmount, uint256 timestamp);
+
+    // Structure to represent an insurance policy
+    struct Policy {
+        address policyholder;
+        uint256 premium;
+        uint256 coverage;
+        uint256 duration;
+        uint256 issuedAt;
+        uint256 lastPayment;
+        bool isActive;
+    }
+
+    // Structure to represent a claim
+    struct Claim {
+        uint256 policyId;
+        uint256 claimAmount;
+        string reason;
+        uint256 submittedAt;
+        bool isProcessed;
+        bool isApproved;
+    }
+
+    // Mappings to store policies and claims
+    mapping(uint256 => Policy) public policies;
+    mapping(uint256 => Claim) public claims;
+
+    uint256 public policyCounter;
+    uint256 public claimCounter;
+
+    address public owner;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the authorized insurer can perform this action");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function issuePolicy(
+        address _policyholder,
+        uint256 _premium,
+        uint256 _coverage,
+        uint256 _duration
+    ) public onlyOwner {
+        require(_policyholder != address(0), "Invalid policyholder address");
+        require(_premium > 0, "Premium must be greater than zero");
+        require(_coverage > 0, "Coverage amount must be greater than zero");
+        require(_duration > 0, "Policy duration must be greater than zero");
+
+        policyCounter++;
+        policies[policyCounter] = Policy({
+            policyholder: _policyholder,
+            premium: _premium,
+            coverage: _coverage,
+            duration: _duration,
+            issuedAt: block.timestamp,
+            lastPayment: 0,
+            isActive: true
+        });
+
+        emit PolicyIssued(policyCounter, _policyholder, _premium, _coverage, _duration);
+    }
+
+    function payPremium(uint256 _policyId) public payable {
+        Policy storage policy = policies[_policyId];
+
+        require(policy.isActive, "Policy is not active or does not exist");
+        require(msg.sender == policy.policyholder, "Only the policyholder can pay the premium");
+        require(msg.value == policy.premium, "Payment amount must match the premium");
+
+        policy.lastPayment = block.timestamp;
+
+        if (block.timestamp > policy.issuedAt + policy.duration) {
+            policy.isActive = false;
+        } else {
+            policy.isActive = true;
+        }
+
+        emit PremiumPaid(_policyId, msg.sender, msg.value, block.timestamp);
+    }
+
+    function submitClaim(
+        uint256 _policyId,
+        uint256 _claimAmount,
+        string memory _reason
+    ) public {
+        Policy storage policy = policies[_policyId];
+
+        require(policy.isActive, "Policy is not active or does not exist");
+        require(msg.sender == policy.policyholder, "Only the policyholder can submit a claim");
+        require(block.timestamp <= policy.issuedAt + policy.duration, "Policy has expired");
+        require(_claimAmount > 0 && _claimAmount <= policy.coverage, "Invalid claim amount");
+
+        claimCounter++;
+        claims[claimCounter] = Claim({
+            policyId: _policyId,
+            claimAmount: _claimAmount,
+            reason: _reason,
+            submittedAt: block.timestamp,
+            isProcessed: false,
+            isApproved: false
+        });
+
+        emit ClaimSubmitted(claimCounter, _policyId, msg.sender, _claimAmount, _reason, block.timestamp);
+    }
+
+    function approveClaim(uint256 _claimId) public onlyOwner {
+        Claim storage claim = claims[_claimId];
+
+        require(!claim.isProcessed, "Claim has already been processed");
+        require(claim.claimAmount > 0, "Invalid claim amount");
+
+        claim.isApproved = true;
+        claim.isProcessed = true;
+
+        Policy storage policy = policies[claim.policyId];
+        emit ClaimApproved(_claimId, claim.policyId, policy.policyholder, claim.claimAmount, block.timestamp);
+    }
+
+    function payClaim(uint256 _claimId) public onlyOwner {
+        Claim storage claim = claims[_claimId];
+        Policy storage policy = policies[claim.policyId];
+
+        require(claim.isProcessed, "Claim must be approved before payment");
+        require(claim.isApproved, "Claim is not approved for payment");
+        require(policy.isActive, "Associated policy is not active");
+        require(claim.claimAmount <= address(this).balance, "Insufficient contract balance");
+        require(claim.claimAmount <= policy.coverage, "Claim exceeds policy coverage");
+
+        payable(policy.policyholder).transfer(claim.claimAmount);
+
+        claim.isProcessed = true;
+        claim.isApproved = false;
+
+        emit ClaimPaid(_claimId, claim.policyId, policy.policyholder, claim.claimAmount, block.timestamp);
+    }
+
+    function withdraw() public onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+}
